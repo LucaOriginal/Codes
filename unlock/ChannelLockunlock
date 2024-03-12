@@ -1,0 +1,105 @@
+import discord
+from discord.ext import commands
+from discord.commands import slash_command
+import aiosqlite
+
+class unlock(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+        self.db_path = 'lockunlock.db'  
+
+    async def create_tables(self):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute('''CREATE TABLE IF NOT EXISTS channel_roles (
+                                guild_id INTEGER PRIMARY KEY,
+                                role_id INTEGER,
+                                UNIQUE(guild_id)
+                                )''')
+            await db.commit()
+
+    @slash_command(description="sperre ein kanal")
+    @discord.default_permissions(manage_channels=True)
+    async def lock(self, ctx, channel: discord.TextChannel, grund: str, teamler: discord.Member):
+        if not await self.check_channel_permission(ctx.author, channel):
+            return await ctx.respond("Du hast nicht die erforderliche Berechtigung, diesen Kanal zu sperren.", ephemeral=True)
+
+        await ctx.respond("Hey, deine Aktion War Erfolgreich!", ephemeral=True)
+        embed = self.create_embed(channel, grund, teamler, "Gesperrt")
+        await channel.set_permissions(ctx.guild.get_role(await self.get_channel_role(ctx.guild.id)), send_messages=False)
+        await channel.send(embed=embed)
+
+    @slash_command(description="entsperre ein kanal")
+    @discord.default_permissions(manage_channels=True)
+    async def unlock(self, ctx, channel: discord.TextChannel, grund: str, teamler: discord.Member):
+        if not await self.check_channel_permission(ctx.author, channel):
+            return await ctx.respond("Du hast nicht die erforderliche Berechtigung, diesen Kanal zu entsperren.", ephemeral=True)
+
+        await ctx.respond("Hey, deine Aktion War Erfolgreich!", ephemeral=True)
+        embed = self.create_embed(channel, grund, teamler, "Entsperrt")
+        await channel.set_permissions(ctx.guild.get_role(await self.get_channel_role(ctx.guild.id)), send_messages=True)
+        await channel.send(embed=embed)
+
+    @slash_command(description="Setup für Kanalsperrungen")
+    async def setup_lockchannels(self, ctx, allowed_role: discord.Role):
+        if not ctx.guild:
+            return await ctx.respond("Dieser Befehl kann nur auf einem Server verwendet werden.", ephemeral=True)
+
+        if not ctx.author.guild_permissions.administrator:
+            return await ctx.respond("Du musst Administrator-Berechtigungen haben, um diesen Befehl auszuführen.", ephemeral=True)
+
+        await self.set_channel_role(ctx.guild.id, allowed_role.id)
+        await ctx.respond(f"Die Rolle {allowed_role.mention} kann nun Kanalsperrbefehle ausführen.", ephemeral=True)
+
+    @slash_command(description="Entfernt das Kanalsperrsystem für diesen Server")
+    async def remove_lockchannels(self, ctx):
+        if not ctx.guild:
+            return await ctx.respond("Dieser Befehl kann nur auf einem Server verwendet werden.", ephemeral=True)
+
+        if not ctx.author.guild_permissions.administrator:
+            return await ctx.respond("Du musst Administrator-Berechtigungen haben, um diesen Befehl auszuführen.", ephemeral=True)
+
+        await self.remove_channel_role(ctx.guild.id)
+        await ctx.respond("Das Kanalsperrsystem wurde erfolgreich entfernt.", ephemeral=True)
+
+    async def get_channel_role(self, guild_id):
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute('SELECT role_id FROM channel_roles WHERE guild_id = ?', (guild_id,))
+            row = await cursor.fetchone()
+            return row[0] if row else None
+
+    async def set_channel_role(self, guild_id, role_id):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute('INSERT OR REPLACE INTO channel_roles (guild_id, role_id) VALUES (?, ?)',
+                             (guild_id, role_id))
+            await db.commit()
+
+    async def remove_channel_role(self, guild_id):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute('DELETE FROM channel_roles WHERE guild_id = ?', (guild_id,))
+            await db.commit()
+
+    async def check_channel_permission(self, member, channel):
+        role_id = await self.get_channel_role(channel.guild.id)
+        if role_id is None:
+            return False
+        role = channel.guild.get_role(role_id)
+        return role is not None and role in member.roles
+
+    def create_embed(self, channel, grund, teamler, action):
+        embed = discord.Embed(
+            title=f'Dieser Kanal wurde Erfolgreich {action}',
+            description="\n"
+                        "**Channel:** "f"```{channel}```\n"
+                        "**Grund:** "f"```{grund}```\n"
+                        "**Teamler:** "f" {teamler.mention} \n",
+            color=0x137901
+        )
+        embed.set_author(icon_url=self.bot.user.display_avatar.url, name=self.bot.user.name)
+        embed.set_footer(icon_url=self.bot.user.display_avatar.url, text=self.bot.user.name)
+        embed.timestamp = discord.utils.utcnow()
+        embed.set_image(url="")
+        return embed
+
+def setup(bot):
+    bot.add_cog(unlock(bot))
+    bot.loop.create_task(unlock(bot).create_tables())
